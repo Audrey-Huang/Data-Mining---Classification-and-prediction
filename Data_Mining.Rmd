@@ -1,0 +1,335 @@
+---
+title: "数据分类与预测"
+author: "Audrey"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+## 数据分类与预测
+**实验数据集：**hotel booking demand
+
+**实验内容：**本次实验对数据集进行了多维度的分析，例如：酒店类型，推广市场，房间类型，预订时间等参数与入住率之间的关系，并且进行了可视化。最后选择了5种模型进行了预测分析。
+
+### 1 数据载入
+**加载库文件**
+```{r}
+rm(list = ls())   
+library(ISLR)     
+library(tidyverse)
+library(ggplot2)
+library(e1071)   
+library(rpart)   
+library(rpart.plot) 
+library(randomForest)
+library(pROC)
+```
+**加载数据**
+```{r echo=TRUE}
+hotel_data <- read_csv("D:\\BIT\\Course\\数据挖掘\\homework\\课后作业9\\hotel_bookings.csv")
+```
+hotel_booking一共包含32列数据，如上展示。
+
+### 2 数据展示与分析
+#### 2.1 数据展示
+```{r}
+hotel_data<- as_tibble(hotel_data)
+glimpse(hotel_data)
+```
+#### 2.2 数据分析
+```{r}
+hotel_data<-hotel_data%>%
+  mutate(
+         hotel=as.factor(hotel),      
+         is_canceled=as.factor(is_canceled),
+         meal=as.factor(meal),
+         country=as.factor(country),
+         market_segment=as.factor(market_segment),
+         distribution_channel=as.factor(distribution_channel),
+         is_repeated_guest=as.factor(is_repeated_guest),
+         reserved_room_type=as.factor(reserved_room_type),
+         assigned_room_type=as.factor(assigned_room_type),
+         deposit_type=as.factor(deposit_type),
+         customer_type=as.factor(customer_type),
+         reservation_status=as.factor(reservation_status),
+         agent=as.factor(agent),
+         company=as.factor(company),
+         arrival_date_day_of_month=as.factor(arrival_date_day_of_month),
+         arrival_date_month=as.factor(arrival_date_month),
+         arrival_date_year=as.factor(arrival_date_year)
+         )
+head(hotel_data)
+tail(hotel_data)
+summary(hotel_data)
+nrow(hotel_data)
+ncol(hotel_data)
+```
+##### 2.2.1 入住信息统计
+
+**根据国家统计入住信息**
+```{r}
+hotel_data%>%
+  group_by(country)%>%
+  summarise(num=n())%>%
+  arrange(desc(num))
+```
+**检查离群点**
+```{r}
+hotel_data%>%
+  filter(adr>1000)
+```
+根据显示结果我们可以得知只有一条记录大于1000，值为5000，用adr的平均值更新该值。然后创建两个新列来计算停留的总天数和总成本。
+```{r}
+hotel_data = hotel_data%>%
+  mutate(adr = replace(adr, adr>1000, mean(adr)))
+hotel_data <- hotel_data %>% 
+  mutate(stay_nights_total = stays_in_weekend_nights + stays_in_week_nights,
+       stay_cost_total = adr * stay_nights_total)
+summary(hotel_data$stay_nights_total)
+summary(hotel_data$stay_cost_total)
+```
+##### 2.2.2 数据可视化
+
+**绘制停留天数和花费总成本散点图**
+```{r}
+ggplot(hotel_data, aes(x=stay_nights_total,y=stay_cost_total,shape=hotel,color=is_canceled))+
+  geom_point(alpha=1)
+```
+
+**根据不同市场进行划分，绘制散点图**
+```{r}
+ggplot(hotel_data, aes(x=stay_nights_total,y=stay_cost_total,shape=hotel,color=is_canceled))+
+  geom_point()+
+  facet_wrap(~market_segment)
+```
+
+**根据年份统计酒店预订数量和取消数量**
+```{r}
+hotel_data%>%
+  ggplot(aes(x=arrival_date_year,fill=is_canceled))+
+  geom_bar()
+```
+
+由上面直方图显示，2016年是预订和取消最多的一年。
+
+**根据酒店类型统计预订和取消数量**
+```{r}
+hotel_data%>%
+  ggplot(aes(x=hotel,fill=is_canceled))+
+  geom_bar()
+```
+
+由上图可看出，城市酒店的取消数量和预定数量较多。
+
+**根据房间类型统计预订和取消数量**
+```{r}
+hotel_data%>%
+  ggplot(aes(x=assigned_room_type,fill=is_canceled))+
+  geom_bar()
+```
+
+由上图可知，A类型房间预定数量和取消数量最多。
+
+**根据分销渠道统计预订预订和取消数量**
+```{r}
+hotel_data%>%
+  ggplot(aes(x=distribution_channel,fill=is_canceled))+
+  geom_bar()
+```
+
+由上图可知，TA/TO渠道预订和取消数量最多。
+
+**根据等待和提前取消天数统计预订和取消数量**
+```{r}
+hotel_data%>%
+  filter(days_in_waiting_list>1)%>%
+  ggplot(aes(x=days_in_waiting_list,fill=is_canceled))+
+  geom_histogram(binwidth = 10)
+```
+```{r}
+hotel_data%>%
+  ggplot(aes(x=deposit_type,fill=is_canceled))+
+  geom_bar()
+```
+
+**根据提前预订天数统计预订和取消数量**
+```{r}
+hotel_data%>%
+  ggplot(aes(x=lead_time,fill=is_canceled))+
+  geom_histogram(binwidth=10,position="stack")
+```
+
+### 3 数据建模
+
+#### 3.1 逻辑回归
+
+根据我们第二章的分析，我们一共使用21个可变数据集进行建模。
+
+设置随机种子为1，选用30%数据作为测试集，70%数据作为训练集。
+```{r}
+set.seed(1) 
+index <- sample(nrow(hotel_data), nrow(hotel_data)*0.3) 
+hotel_data <- hotel_data %>%
+              filter(market_segment!='Undefined')
+test <- hotel_data[index,]       
+training <-hotel_data[-index,]
+training_1 <- training[c('hotel','is_canceled','lead_time','adults','children','babies','meal',
+                         'market_segment','distribution_channel','is_repeated_guest',
+                         'previous_cancellations','previous_bookings_not_canceled','reserved_room_type',
+                         'deposit_type','days_in_waiting_list','customer_type','adr',
+                         'required_car_parking_spaces','stay_nights_total','stay_cost_total')]
+logit_training_model<-glm(is_canceled~.,family="binomial",data=training_1)
+summary(logit_training_model)
+```
+
+**逻辑回归预测**
+```{r}
+test$logit_pred_prob<-predict(logit_training_model,test,type="response")
+test$logit_pred_class<-ifelse(test$logit_pred_prob>0.5,"1","0") 
+table(test$is_canceled==test$logit_pred_class)
+```
+
+混淆矩阵如下所示。
+```{r}
+table(test$logit_pred_class,test$is_canceled, dnn=c("predicted","actual"))
+27939/nrow(test)
+```
+
+由显示结果可知，逻辑回归的准确率约为78%。
+
+#### 3.2 贝叶斯模型
+```{r}
+model_nb = naiveBayes(is_canceled ~ ., data = training_1)
+model_nb
+```
+
+**贝叶斯模型预测**
+```{r}
+pred_nb = predict(model_nb, as.data.frame(test))
+pred_prob_nb = predict(model_nb, as.data.frame(test), type = "raw")
+table(pred_nb,test$is_canceled, dnn=c("predicted","actual"))
+(2922+13138)/nrow(test)
+```
+
+根据贝叶斯模型的显示结果可知，该模型的准确率很低，只有不到45%。
+
+#### 3.3 分类树
+```{r}
+training_model<-rpart(is_canceled~.,
+                      data=training_1, 
+                      method="class", 
+                      control=rpart.control(cp=0.03))
+rpart.plot(training_model)
+```
+
+分类树模型验证结果如下：
+```{r}
+test$ct_pred_prob<-predict(training_model,test)[,2]
+test$ct_pred_class<-predict(training_model,test,type="class")
+table(test$is_canceled==test$ct_pred_class)
+```
+
+#### 3.4 决策树
+
+**K-cross交叉验证**
+```{r}
+set.seed(1) 
+full_tree<-rpart(is_canceled~.,
+                     data=training_1, 
+                     method="class",
+                     control=rpart.control(cp=0, maxdepth = 3))
+rpart.plot(full_tree)
+printcp(full_tree)
+```
+
+使用plotcp()，可以检查交叉验证错误率如何随着模型复杂性的增加而变化。图表中，x轴是模型复杂性，y轴是x错误率(来自交叉验证)。横线代表着标准差。
+```{r}
+plotcp(full_tree)
+```
+
+我们可以选择最小化交叉验证错误的cp值。
+```{r}
+min_xerror<-full_tree$cptable[which.min(full_tree$cptable[,"xerror"]),]
+min_xerror
+# prune tree with minimum cp value
+min_xerror_tree<-prune(full_tree, cp=min_xerror[1])
+rpart.plot(min_xerror_tree)
+```
+
+**决策树准确率**
+```{r}
+bp_tree<-min_xerror_tree
+test$ct_bp_pred_prob<-predict(bp_tree,test)[,2]
+test$ct_bp_pred_class=ifelse(test$ct_bp_pred_prob>0.5,"Yes","No")
+table(test$ct_bp_pred_class,test$is_canceled, dnn=c("predicted","actual"))
+(22486+4964)/nrow(test)
+```
+
+由上面结果可知，决策树的准确率为76.6%。
+
+#### 3.5 随机森林
+```{r}
+set.seed(1)
+rf_training_model<-randomForest(is_canceled~.,    
+                       data=training_1,          
+                       ntree=500,                     
+                       cutoff=c(0.5,0.5), 
+                       mtry=2,
+                       importance=TRUE)
+rf_training_model
+```
+
+**模型优化**
+```{r}
+set.seed(1)              
+res <- tuneRF(x = training_1%>%select(-is_canceled),
+              y = training_1$is_canceled,mtryStart=2,
+              ntreeTry = 500)
+```
+
+由结果可知，当metry=8时，模型显示除了最小的超出边界。
+
+**随机森林预测**
+```{r}
+rf_best_model<-randomForest(is_canceled~.,              
+                       data=training_1,          
+                       ntree=500,                     
+                       cutoff=c(0.5,0.5), 
+                       mtry=8,
+                       importance=TRUE)
+rf_best_model
+test$rf_pred_prob<-predict(rf_best_model,test,type="prob")[,2]  
+test$rf_pred_class<-predict(rf_best_model,test,type="class")
+table(test$is_canceled==test$rf_pred_class)
+```
+
+准确率如下：
+```{r}
+29451/nrow(test)
+```
+
+由结果可得随机森林预测的准确率为82.22%。
+
+#### 3.6 模型比较
+
+绘制各种分类方法ROC曲线。
+```{r}
+ct_roc<-roc(test$is_canceled,test$ct_bp_pred_prob,auc=TRUE)
+logit_roc<-roc(test$is_canceled,test$logit_pred_prob,auc=TRUE)
+nb_roc = roc(test$is_canceled,pred_prob_nb[,2],auc=TRUE)
+rf_roc<-roc(test$is_canceled,test$rf_pred_prob,auc=TRUE)
+plot(logit_roc,print.auc=TRUE,print.auc.y=.4, col="green")
+plot(rf_roc,print.auc=TRUE,print.auc.y=.1,col="yellow",add=TRUE)
+plot(nb_roc,print.auc=TRUE,print.auc.y=.3, col="red",add=TRUE)
+plot(ct_roc,print.auc=TRUE,print.auc.y=.2, col="blue",add=TRUE)
+```
+
+由结果可明显看出，随机森林预测的准确率是最高的。
+
+#### 3.7 预测结果保存
+
+将预测的结果保存下来。
+```{r}
+final_output <- data.frame(Hotel = test$hotel, Cancellation = test$rf_pred_class)
+write.csv(final_output, file = 'RF_Hotel_Solution.csv', row.names = F)
+```
