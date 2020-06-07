@@ -6,7 +6,7 @@
 
 **Data_Mining.html:** 数据挖掘过程详细报告。
 
-**Data_Mining.Rmd:** 为数据处理以及挖掘过程完整的R代码。
+**Data_Mining.Rmd:** 为数据处理以及挖掘过程完整的R代码。(可用Typora或者记事本打开查看)
 
 **RF_Hotel_Solution.csv:** 最终输出结果。
 
